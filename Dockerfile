@@ -14,19 +14,17 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean
 
 WORKDIR /llama
+
+# Clone and build llama.cpp with server enabled
 RUN git clone https://github.com/ggerganov/llama.cpp.git . && \
     mkdir build && cd build && \
-    cmake .. -G Ninja -DLLAMA_NATIVE=ON && \
+    cmake .. -G Ninja -DLLAMA_NATIVE=ON -DLLAMA_BUILD_SERVER=ON && \
     ninja && \
-    ls -l bin && \
-    cd ../examples/server && \
-    mkdir build && cd build && \
-    cmake .. -G Ninja && \
-    ninja && \
-    ls -l build
+    ls -l
 
 EXPOSE 8080
 
-ENTRYPOINT ["/llama/examples/server/build/server"]
+# This is now correct: the server binary is directly in /llama/build
+ENTRYPOINT ["/llama/build/server"]
 
 CMD ["-m", "/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf", "--host", "0.0.0.0", "--port", "8080"]
