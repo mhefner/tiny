@@ -1,0 +1,11 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiny-ai
+spec:
+  template:
+    spec:
+      containers:
+        - name: tiny-ai
+          image: mhefner1983/tiny:arm  # tag it differently for dev
+          imagePullPolicy: Always

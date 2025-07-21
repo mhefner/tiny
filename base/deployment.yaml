@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiny-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tiny-ai
+  template:
+    metadata:
+      labels:
+        app: tiny-ai
+    spec:
+      imagePullSecrets:
+        - name: dockerhub-secret
+      containers:
+      - name: tiny-ai
+        image: mhefner1983/tiny:arm
+        ports:
+        - containerPort: 80
