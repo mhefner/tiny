@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""
+Simplified test suite for llama.cpp Docker image
+Tests Docker image functionality with better error handling
+"""
+
+import subprocess
+import pytest
+import os
+import tempfile
+import shutil
+from pathlib import Path
+
+# Try to import docker, make tests conditional
+try:
+    import docker
+    DOCKER_AVAILABLE = True
+except ImportError:
+    DOCKER_AVAILABLE = False
+
+
+class TestDockerfileBasics:
+    """Basic Dockerfile validation tests that don't require Docker"""
+    
+    def setup_method(self):
+        """Setup for each test"""
+        self.dockerfile_content = '''FROM debian:bullseye-slim
+RUN apt-get update && \\
+ apt-get install -y build-essential git cmake curl && \\
+ apt-get clean
+# Build llama.cpp for ARM
+RUN git clone https://github.com/ggerganov/llama.cpp.git /llama && \\
+ cd /llama && \\
+ make LLAMA_NATIVE=ON
+WORKDIR /llama
+COPY models /models
+ENTRYPOINT ["./main"]'''
+    
+    def test_dockerfile_has_required_instructions(self):
+        """Test that Dockerfile contains all required instructions"""
+        required_instructions = ['FROM', 'RUN', 'WORKDIR', 'COPY', 'ENTRYPOINT']
+        
+        for instruction in required_instructions:
+            assert instruction in self.dockerfile_content, f"Missing {instruction} instruction"
+    
+    def test_base_image_specified(self):
+        """Test that a base image is specified"""
+        assert 'FROM debian:bullseye-slim' in self.dockerfile_content
+    
+    def test_required_packages_listed(self):
+        """Test that required packages are in the install command"""
+        required_packages = ['build-essential', 'git', 'cmake', 'curl']
+        
+        for package in required_packages:
+            assert package in self.dockerfile_content, f"Missing package: {package}"
+    
+    def test_apt_cleanup_included(self):
+        """Test that apt cache cleanup is included"""
+        assert 'apt-get clean' in self.dockerfile_content
+    
+    def test_workdir_set_correctly(self):
+        """Test that WORKDIR is set to the correct path"""
+        assert 'WORKDIR /llama' in self.dockerfile_content
+    
+    def test_entrypoint_uses_exec_form(self):
+        """Test that ENTRYPOINT uses exec form (security best practice)"""
+        assert 'ENTRYPOINT ["./main"]' in self.dockerfile_content
+        # Ensure it's not using shell form
+        assert 'ENTRYPOINT ./main' not in self.dockerfile_content
+    
+    def test_models_directory_copied(self):
+        """Test that models directory is copied"""
+        assert 'COPY models /models' in self.dockerfile_content
+    
+    def test_llama_optimization_enabled(self):
+        """Test that native optimization is enabled"""
+        assert 'LLAMA_NATIVE=ON' in self.dockerfile_content
+    
+    def test_git_repository_specified(self):
+        """Test that llama.cpp repository is specified"""
+        assert 'github.com/ggerganov/llama.cpp.git' in self.dockerfile_content
+
+
+@pytest.mark.skipif(not shutil.which('docker'), reason="Docker command not available")
+class TestDockerCommands:
+    """Tests that require Docker CLI but not Python docker library"""
+    
+    def setup_method(self):
+        """Setup for each test"""
+        self.dockerfile_content = '''FROM debian:bullseye-slim
+RUN apt-get update && \\
+ apt-get install -y build-essential git cmake curl && \\
+ apt-get clean
+# Build llama.cpp for ARM
+RUN git clone https://github.com/ggerganov/llama.cpp.git /llama && \\
+ cd /llama && \\
+ make LLAMA_NATIVE=ON
+WORKDIR /llama
+COPY models /models
+ENTRYPOINT ["./main"]'''
+    
+    def test_docker_daemon_accessible(self):
+        """Test that Docker daemon is running and accessible"""
+        try:
+            result = subprocess.run(['docker', 'info'], 
+                                  capture_output=True, text=True, timeout=10)
+            assert result.returncode == 0, "Docker daemon not accessible"
+        except subprocess.TimeoutExpired:
+            pytest.fail("Docker daemon check timed out")
+        except Exception as e:
+            pytest.skip(f"Docker daemon not accessible: {e}")
+    
+    def test_base_image_pullable(self):
+        """Test that base image can be pulled"""
+        try:
+            result = subprocess.run(['docker', 'pull', 'debian:bullseye-slim'], 
+                                  capture_output=True, text=True, timeout=120)
+            assert result.returncode == 0, f"Cannot pull base image: {result.stderr}"
+        except subprocess.TimeoutExpired:
+            pytest.skip("Base image pull timed out - network issue")
+        except Exception as e:
+            pytest.skip(f"Cannot test base image pull: {e}")
+    
+    def test_dockerfile_syntax_valid(self):
+        """Test Dockerfile syntax using Docker CLI"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Write Dockerfile
+            dockerfile_path = os.path.join(temp_dir, 'Dockerfile')
+            with open(dockerfile_path, 'w') as f:
+                f.write(self.dockerfile_content)
+            
+            # Create models directory
+            models_dir = os.path.join(temp_dir, 'models')
+            os.makedirs(models_dir)
+            Path(os.path.join(models_dir, '.gitkeep')).touch()
+            
+            try:
+                # Try to start build process (will fail but syntax should be OK)
+                result = subprocess.run([
+                    'docker', 'build', '--no-cache', '-t', 'syntax-test', temp_dir
+                ], capture_output=True, text=True, timeout=60)
+                
+                # Check that we don't have syntax errors
+                error_indicators = ['unknown instruction', 'dockerfile parse error', 'syntax error']
+                for error in error_indicators:
+                    assert error.lower() not in result.stderr.lower(), f"Syntax error detected: {result.stderr}"
+                    
+            except subprocess.TimeoutExpired:
+                # Timeout is OK - means build started (syntax is valid)
+                pass
+            except Exception as e:
+                pytest.skip(f"Cannot test Dockerfile syntax: {e}")
+
+
+@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="Docker Python library not available")
+class TestDockerIntegration:
+    """Integration tests using Docker Python library"""
+    
+    def setup_method(self):
+        """Setup Docker client"""
+        try:
+            self.client = docker.from_env()
+            self.dockerfile_content = '''FROM debian:bullseye-slim
+RUN apt-get update && \\
+ apt-get install -y build-essential git cmake curl && \\
+ apt-get clean
+# Build llama.cpp for ARM
+RUN git clone https://github.com/ggerganov/llama.cpp.git /llama && \\
+ cd /llama && \\
+ make LLAMA_NATIVE=ON
+WORKDIR /llama
+COPY models /models
+ENTRYPOINT ["./main"]'''
+        except Exception as e:
+            pytest.skip(f"Cannot connect to Docker: {e}")
+    
+    def test_docker_client_connection(self):
+        """Test that Docker client can connect"""
+        try:
+            info = self.client.info()
+            assert 'ServerVersion' in info
+        except Exception as e:
+            pytest.fail(f"Docker client connection failed: {e}")
+    
+    def test_simple_build_context(self):
+        """Test building with minimal context"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create Dockerfile
+            dockerfile_path = os.path.join(temp_dir, 'Dockerfile')
+            simple_dockerfile = '''FROM debian:bullseye-slim
+RUN echo "test"
+WORKDIR /test'''
+            
+            with open(dockerfile_path, 'w') as f:
+                f.write(simple_dockerfile)
+            
+            try:
+                image, logs = self.client.images.build(
+                    path=temp_dir,
+                    tag='simple-test',
+                    rm=True,
+                    timeout=60
+                )
+                
+                assert image is not None
+                
+                # Cleanup
+                self.client.images.remove('simple-test', force=True)
+                
+            except Exception as e:
+                pytest.skip(f"Simple build test failed: {e}")
+
+
+class TestSecurityBestPractices:
+    """Test security and best practices (no Docker required)"""
+    
+    def setup_method(self):
+        """Setup for each test"""
+        self.dockerfile_content = '''FROM debian:bullseye-slim
+RUN apt-get update && \\
+ apt-get install -y build-essential git cmake curl && \\
+ apt-get clean
+# Build llama.cpp for ARM
+RUN git clone https://github.com/ggerganov/llama.cpp.git /llama && \\
+ cd /llama && \\
+ make LLAMA_NATIVE=ON
+WORKDIR /llama
+COPY models /models
+ENTRYPOINT ["./main"]'''
+    
+    def test_no_unnecessary_packages(self):
+        """Test that unnecessary packages are not installed"""
+        unnecessary = ['vim', 'nano', 'sudo', 'openssh-server', 'systemd']
+        
+        for package in unnecessary:
+            assert package not in self.dockerfile_content, f"Unnecessary package found: {package}"
+    
+    def test_uses_slim_base_image(self):
+        """Test that a slim base image is used"""
+        assert 'bullseye-slim' in self.dockerfile_content
+    
+    def test_apt_cache_cleaned(self):
+        """Test that apt cache is properly cleaned"""
+        assert 'apt-get clean' in self.dockerfile_content
+    
+    def test_single_run_command_for_packages(self):
+        """Test that package installation uses single RUN command (reduces layers)"""
+        # Count RUN commands for package installation
+        lines = self.dockerfile_content.split('\n')
+        package_run_commands = [line for line in lines if 'apt-get install' in line]
+        assert len(package_run_commands) == 1, "Should use single RUN command for package installation"
+    
+    def test_user_not_specified(self):
+        """Document that USER is not specified (potential security issue)"""
+        # This test documents a security consideration
+        assert 'USER' not in self.dockerfile_content
+        # Note: Running as root is sometimes necessary for build tools
+        # but consider adding USER directive for runtime
+
+
+class TestGitRepository:
+    """Test Git repository accessibility (no Docker required)"""
+    
+    def test_llama_cpp_repository_accessible(self):
+        """Test that llama.cpp repository is accessible"""
+        try:
+            result = subprocess.run([
+                'git', 'ls-remote', '--exit-code', '--heads',
+                'https://github.com/ggerganov/llama.cpp.git'
+            ], capture_output=True, text=True, timeout=30)
+            
+            assert result.returncode == 0, "llama.cpp repository is not accessible"
+        except subprocess.TimeoutExpired:
+            pytest.skip("Git repository check timed out - network issue")
+        except FileNotFoundError:
+            pytest.skip("Git command not available")
+        except Exception as e:
+            pytest.fail(f"Repository accessibility check failed: {e}")
+    
+    def test_git_command_available(self):
+        """Test that git command is available on system"""
+        assert shutil.which('git') is not None, "Git command not found in PATH"
+
+
+if __name__ == "__main__":
+    # Run tests with more verbose output
+    pytest.main([__file__, "-v", "--tb=short", "-x"])

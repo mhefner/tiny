@@ -1,16 +1,25 @@
-FROM debian:bullseye-slim
+FROM debian:bullseye
 
-RUN apt-get update && \
-    apt-get install -y build-essential git cmake curl && \
-    apt-get clean
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Build llama.cpp for ARM
-RUN git clone https://github.com/ggerganov/llama.cpp.git /llama && \
-    cd /llama && \
-    make LLAMA_NATIVE=ON
+# Install required packages
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    wget \
+    ninja-build \
+    libopenblas-dev \
+    libcurl4-openssl-dev \
+    && apt-get clean
 
+# Build llama.cpp with CMake + Ninja
 WORKDIR /llama
-COPY models /models
+RUN git clone https://github.com/ggerganov/llama.cpp.git . && \
+    mkdir build && cd build && \
+    cmake .. -G Ninja -DLLAMA_NATIVE=ON && \
+    ninja
 
-ENTRYPOINT ["./main"]
+ENTRYPOINT ["/llama/build/bin/main"]
 
