@@ -25,6 +25,6 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git . && \
 EXPOSE 8080
 
 # This is now correct: the server binary is directly in /llama/build
-ENTRYPOINT ["/llama/build/server"]
+ENTRYPOINT ["/llama/build/bin/llama-server"]
 
 CMD ["-m", "/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf", "--host", "0.0.0.0", "--port", "8080"]
