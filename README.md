@@ -1,39 +1,271 @@
-```markdown
-# TinyLlama-1.1B-Chat-v1.0 Docker Image
+# TinyLlama 1.1B Chat Deployment on K3s with ArgoCD
 
-This is a basic Docker image containing all necessary components to run [TinyLlama/TinyLlama-1.1B-Chat-v1.0](https://huggingface.co/tuner00/TinyLlama_1.1B_Chat_v1.0).
+This project deploys the TinyLlama/TinyLlama-1.1B-Chat-v1.0 model on a Kubernetes cluster using K3s and ArgoCD for GitOps-based continuous deployment.
+
+## Overview
+
+TinyLlama is a compact 1.1B parameter language model that provides chat capabilities while being lightweight enough to run on resource-constrained environments. This deployment leverages K3s for a minimal Kubernetes footprint and ArgoCD for automated, declarative deployments.
+
+## Prerequisites
+
+- Linux server or virtual machine with at least 4GB RAM and 2 CPU cores
+- Docker installed
+- Git installed
+- kubectl installed
+- Minimum 10GB available disk space
+
+## Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Git Repository │───▶│     ArgoCD      │───▶│   K3s Cluster   │
+│                 │    │                 │    │                 │
+│ - Manifests     │    │ - Sync Policy   │    │ - TinyLlama Pod │
+│ - Configs       │    │ - Health Checks │    │ - Service       │
+│ - Helm Charts   │    │ - Auto Deploy   │    │ - Ingress       │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
 
 ## Quick Start
 
-1. **Pull Docker image**: Pull the docker image from Docker Hub by running the following command in your terminal:
-    ```bash
-    docker pull username/tinylamada:latest
-    ```
-2. **Run Container**: Run the container with the appropriate arguments:
-    ```bash
-    docker run -it --rm tinylama:latest
-    ```
-3. **Interact with Model**: After running the container, you should have a command line interface where you can interactively input text and receive responses from the model.
+### 1. Install K3s
 
-## Building Image Locally
+```bash
+# Install K3s (single node)
+curl -sfL https://get.k3s.io | sh -
 
-If you want to build this image locally rather than pulling it from Docker Hub, follow these steps:
+# Verify installation
+sudo k3s kubectl get nodes
 
-1. **Clone Repo**: Clone the repository containing the Dockerfile:
-    ```bash
-    git clone https://github.com/username/tinylama-docker.git
-    ```
-2. **Build Image**: Navigate to the cloned directory and build the image:
-    ```bash
-    cd tinylama-docker && docker build -t local/tinylama:latest .
-    ```
-3. **Run Container**: Run the built image just like in the "Quick Start" section above.
-
-## About this Image
-
-This Docker image is based on the official Python 3.8 image from Docker Hub and includes PyTorch, Transformers, Sentencepiece, and Tqdm for running
-[TinyLlama/TinyLlama-1.1B-Chat-v1.0](https://huggingface.co/tuner00/TinyLlama_1.1B_Chat_v1.0). The image does not include CUDA support, as PyTorch is compiled for x86 hardware and the Docker image would be
-too large to contain it.
+# Copy kubeconfig for kubectl access
+mkdir -p ~/.kube
+sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+sudo chown $(id -u):$(id -g) ~/.kube/config
+export KUBECONFIG=~/.kube/config
 ```
-Remember to replace "username" with your actual Docker Hub username when pulling from Docker Hub or building locally. Also note that this README assumes a very basic understanding of how Docker works, so you
-might need to adjust it based on your specific project needs.
+
+### 2. Install ArgoCD
+
+```bash
+# Create ArgoCD namespace
+kubectl create namespace argocd
+
+# Install ArgoCD
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+# Wait for ArgoCD to be ready
+kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
+
+# Get initial admin password
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+
+# Port forward to access ArgoCD UI (run in background)
+kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+```
+
+### 3. Deploy TinyLlama Application
+
+```bash
+# Clone this repository
+git clone <your-repo-url>
+cd tinyllama-k3s-argocd
+
+# Apply the ArgoCD application manifest
+kubectl apply -f argocd/application.yaml
+
+# Monitor deployment
+kubectl get pods -n tinyllama -w
+```
+
+## Project Structure
+
+```
+.
+├── README.md
+├── argocd/
+│   ├── application.yaml          # ArgoCD Application definition
+│   └── project.yaml              # ArgoCD Project definition
+├── k8s/
+│   ├── namespace.yaml            # Kubernetes namespace
+│   ├── deployment.yaml           # TinyLlama deployment
+│   ├── service.yaml              # Kubernetes service
+│   ├── ingress.yaml              # Ingress configuration
+│   └── configmap.yaml            # Configuration settings
+└── helm/                         # Optional Helm chart
+    ├── Chart.yaml
+    ├── values.yaml
+    └── templates/
+```
+
+## Configuration
+
+### Environment Variables
+
+The TinyLlama deployment supports the following environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MODEL_NAME` | HuggingFace model identifier | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
+| `MAX_TOKENS` | Maximum tokens per response | `512` |
+| `TEMPERATURE` | Sampling temperature | `0.7` |
+| `PORT` | Service port | `8000` |
+
+### Resource Requirements
+
+```yaml
+resources:
+  requests:
+    memory: "2Gi"
+    cpu: "1000m"
+  limits:
+    memory: "4Gi"
+    cpu: "2000m"
+```
+
+## Accessing the Application
+
+### Via Port Forward (Development)
+
+```bash
+kubectl port-forward svc/tinyllama-service -n tinyllama 8000:8000
+curl http://localhost:8000/chat -X POST -H "Content-Type: application/json" -d '{"message": "Hello!"}'
+```
+
+### Via Ingress (Production)
+
+Update the ingress configuration in `k8s/ingress.yaml` with your domain:
+
+```yaml
+spec:
+  rules:
+  - host: tinyllama.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: tinyllama-service
+            port:
+              number: 8000
+```
+
+## ArgoCD Configuration
+
+### Sync Policies
+
+The application is configured with automatic sync enabled:
+
+```yaml
+spec:
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+```
+
+### Health Checks
+
+Custom health checks ensure the TinyLlama service is responding correctly before marking the deployment as healthy.
+
+## Monitoring and Troubleshooting
+
+### Check Application Status
+
+```bash
+# ArgoCD application status
+kubectl get application tinyllama -n argocd
+
+# Pod status
+kubectl get pods -n tinyllama
+
+# Service endpoints
+kubectl get endpoints -n tinyllama
+
+# Logs
+kubectl logs -f deployment/tinyllama-deployment -n tinyllama
+```
+
+### Common Issues
+
+**Pod stuck in Pending state:**
+- Check node resources: `kubectl describe nodes`
+- Verify image pull: `kubectl describe pod <pod-name> -n tinyllama`
+
+**Service not accessible:**
+- Verify service endpoints: `kubectl get endpoints -n tinyllama`
+- Check ingress configuration: `kubectl describe ingress -n tinyllama`
+
+**ArgoCD sync failures:**
+- Check application events: `kubectl describe application tinyllama -n argocd`
+- Review ArgoCD logs: `kubectl logs -f deployment/argocd-application-controller -n argocd`
+
+## Scaling
+
+### Horizontal Pod Autoscaler
+
+Enable HPA for automatic scaling based on CPU/memory usage:
+
+```bash
+kubectl autoscale deployment tinyllama-deployment --cpu-percent=70 --min=1 --max=5 -n tinyllama
+```
+
+### Manual Scaling
+
+```bash
+kubectl scale deployment tinyllama-deployment --replicas=3 -n tinyllama
+```
+
+## Security Considerations
+
+- Enable RBAC for ArgoCD
+- Use network policies to restrict pod communication
+- Implement resource quotas and limits
+- Regular security scanning of container images
+- Enable audit logging in K3s
+
+## Backup and Recovery
+
+### Backup Configuration
+
+```bash
+# Backup K3s etcd
+sudo k3s etcd-snapshot save backup-$(date +%Y%m%d-%H%M%S)
+
+# Backup ArgoCD configuration
+kubectl get applications -n argocd -o yaml > argocd-applications-backup.yaml
+```
+
+### Recovery
+
+```bash
+# Restore from etcd snapshot
+sudo k3s server --cluster-init --cluster-reset --etcd-snapshot=backup-file
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test the deployment
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Support
+
+For issues and questions:
+- Create an issue in this repository
+- Check the ArgoCD documentation: https://argo-cd.readthedocs.io/
+- Refer to K3s documentation: https://docs.k3s.io/
+
+## Acknowledgments
+
+- TinyLlama team for the excellent small language model
+- ArgoCD community for GitOps tooling
+- Rancher Labs for K3s lightweight Kubernetes
