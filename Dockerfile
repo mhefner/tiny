@@ -19,7 +19,13 @@ WORKDIR /llama
 RUN git clone https://github.com/ggerganov/llama.cpp.git . && \
     mkdir build && cd build && \
     cmake .. -G Ninja -DLLAMA_NATIVE=ON && \
-    ninja
+    ninja && \
+    ls -l bin
 
-ENTRYPOINT ["/llama/build/bin/main"]
+# Expose the HTTP server port for llama.cpp
+EXPOSE 8080
+
+# Use the server binary for API access
+ENTRYPOINT ["/llama/build/bin/server"]
+
 

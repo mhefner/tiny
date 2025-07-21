@@ -18,4 +18,4 @@ spec:
       - name: tiny-ai
         image: mhefner1983/tiny:arm
         ports:
-        - containerPort: 80
+        - containerPort: 8080
